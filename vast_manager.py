@@ -1,6 +1,7 @@
 import subprocess
 import json
 import time
+import os
 
 def search_cheapest_instance(gpu_name="RTX 4090", num_gpus=1):
     """Searches for the cheapest available spot instance on Vast.ai."""
@@ -39,8 +40,8 @@ def search_cheapest_instance(gpu_name="RTX 4090", num_gpus=1):
             print(f"    Vast.ai CLI error: {e.stderr}")
         return None
 
-def create_instance(instance_id, docker_image, env_vars):
-    """Creates a Vast.ai instance, passing configuration as environment variables."""
+def create_instance(instance_id, docker_image, env_vars, local_train_script="training/train.py"):
+    """Creates a Vast.ai instance and uploads local training script."""
     print(f"--> Attempting to create instance {instance_id}...")
     
     existing_instances = get_running_instances()
@@ -48,22 +49,18 @@ def create_instance(instance_id, docker_image, env_vars):
         print(f"--> Found {len(existing_instances)} existing instance(s). Destroying them first...")
         for existing_id in existing_instances:
             destroy_instance(existing_id)
-    
-    # Build environment variables string for the command
-    env_string = " ".join([f"{key}='{value}'" for key, value in env_vars.items()])
-    run_command = f"bash -c 'export {env_string} && python /app/train.py'"
 
+    # Create instance without onstart command first
     command = [
         "vastai", "create", "instance", str(instance_id),
         "--image", docker_image,
         "--disk", "50",
-        "--args", run_command,
         "--raw"
     ]
     
-    # Also add environment variables to the vastai command itself for redundancy
+    # Add environment variables to command
     for key, value in env_vars.items():
-        command.extend(["--env", f"{key}={value}"])
+        command.extend(["-e", f"{key}={value}"])
              
     print(f"    Running command: {' '.join(command)}")
     try:
@@ -72,7 +69,27 @@ def create_instance(instance_id, docker_image, env_vars):
         if instance_info.get("success"):
             new_id = instance_info['new_contract']
             print(f"--> Successfully created instance {new_id}. Waiting for it to start...")
-            return new_id
+            
+            # Wait for instance to be running
+            if wait_for_instance_ready(new_id):
+                print(f"--> Instance {new_id} is ready!")
+                
+                # Upload local training script
+                if upload_file_to_instance(new_id, local_train_script, "/app/train.py"):
+                    # Start training
+                    start_training_command = f"cd /app && python train.py"
+                    if execute_command_on_instance(new_id, start_training_command):
+                        print(f"--> Training started successfully on instance {new_id}!")
+                        return new_id
+                    else:
+                        print(f"--> Failed to start training on instance {new_id}")
+                        return None
+                else:
+                    print(f"--> Failed to upload training script to instance {new_id}")
+                    return None
+            else:
+                print(f"--> Instance {new_id} failed to start properly.")
+                return None
         else:
             print(f"--> Failed to create instance. Response: {instance_info}")
             return None
@@ -99,6 +116,107 @@ def get_running_instances():
     except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
         print(f"--> Error getting running instances: {e}")
         return []
+
+def get_instance_ssh_info(instance_id):
+    """Gets SSH connection info for an instance."""
+    try:
+        result = subprocess.run(
+            ["vastai", "show", "instance", str(instance_id), "--raw"],
+            capture_output=True, text=True, check=True
+        )
+        instance_info = json.loads(result.stdout)
+        
+        ssh_host = instance_info.get('ssh_host')
+        ssh_port = instance_info.get('ssh_port')
+        
+        if ssh_host and ssh_port:
+            return ssh_host, ssh_port
+        return None, None
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+        print(f"--> Error getting SSH info: {e}")
+        return None, None
+
+def upload_file_to_instance(instance_id, local_file_path, remote_path="/app/"):
+    """Uploads a local file to the instance via SCP."""
+    ssh_host, ssh_port = get_instance_ssh_info(instance_id)
+    if not ssh_host or not ssh_port:
+        print(f"--> Could not get SSH info for instance {instance_id}")
+        return False
+    
+    print(f"--> Uploading {local_file_path} to instance {instance_id}...")
+    
+    try:
+        scp_command = [
+            "scp", "-P", str(ssh_port),
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            local_file_path,
+            f"root@{ssh_host}:{remote_path}"
+        ]
+        
+        subprocess.run(scp_command, capture_output=True, text=True, check=True)
+        print(f"--> Successfully uploaded {os.path.basename(local_file_path)}")
+        return True
+        
+    except subprocess.CalledProcessError as e:
+        print(f"--> Error uploading file: {e}")
+        if e.stderr:
+            print(f"    SCP error: {e.stderr}")
+        return False
+
+def execute_command_on_instance(instance_id, command):
+    """Executes a command on the instance via SSH."""
+    ssh_host, ssh_port = get_instance_ssh_info(instance_id)
+    if not ssh_host or not ssh_port:
+        print(f"--> Could not get SSH info for instance {instance_id}")
+        return False
+    
+    print(f"--> Executing command on instance {instance_id}: {command}")
+    
+    try:
+        ssh_command = [
+            "ssh", "-p", str(ssh_port),
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            f"root@{ssh_host}",
+            command
+        ]
+        
+        # Run in background so it doesn't block
+        subprocess.Popen(ssh_command)
+        print(f"--> Command started successfully on instance {instance_id}")
+        return True
+        
+    except Exception as e:
+        print(f"--> Error executing command: {e}")
+        return False
+
+def wait_for_instance_ready(instance_id, timeout=300):
+    """Waits for instance to be ready and running."""
+    print(f"--> Waiting for instance {instance_id} to be ready...")
+    start_time = time.time()
+    
+    while time.time() - start_time < timeout:
+        try:
+            result = subprocess.run(
+                ["vastai", "show", "instance", str(instance_id), "--raw"],
+                capture_output=True, text=True, check=True
+            )
+            instance_info = json.loads(result.stdout)
+            
+            if instance_info.get('actual_status') == 'running':
+                print(f"--> Instance {instance_id} is now running!")
+                return True
+                
+            print(f"    Current status: {instance_info.get('actual_status', 'unknown')}")
+            time.sleep(10)
+            
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            print(f"    Error checking instance status: {e}")
+            time.sleep(10)
+    
+    print(f"--> Timeout waiting for instance {instance_id} to be ready")
+    return False
 
 def destroy_instance(instance_id):
     """Destroys a Vast.ai instance."""

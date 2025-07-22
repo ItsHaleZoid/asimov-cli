@@ -5,9 +5,9 @@ docker_image: "halez/lora-finetuner:latest"
 hf_token: "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" 
 
 # Model and dataset details
-base_model_id: "deepseek-ai/DeepSeek-R1"
+base_model_id: "meta-llama/Meta-Llama-3-8B"
 dataset_id: "databricks/databricks-dolly-15k" # Example dataset
-lora_model_repo: "HaleZoid/my-deepseek-r1-lora" # Where to save the adapter
+lora_model_repo: "HaleZoid/my-llama3-lora" # Where to save the adapter
 
 # Vast.ai GPU requirements
 gpu_name: "RTX 4090"

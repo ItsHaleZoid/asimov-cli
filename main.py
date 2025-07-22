@@ -15,7 +15,9 @@ def run_tuning_job(config):
     if not docker_image:
         print("Error: 'docker_image' not found in config file. Exiting.")
         sys.exit(1)
+    
     print(f"--> Using Docker image: {docker_image}")
+    print(f"--> Will upload local training script: training/train.py")
 
     # --- 2. Find and Rent GPU ---
     instance_id = vast_manager.search_cheapest_instance(
