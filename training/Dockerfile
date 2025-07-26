@@ -1,30 +1,47 @@
-# Use a smaller runtime image as we don't need the full CUDA SDK
-FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+# Use PyTorch base image with CUDA support and build tools
+FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
 
 # Avoid prompts during installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies and clean up apt cache in the same layer
+# Install additional system dependencies (PyTorch image has most CUDA tools)
 RUN apt-get update && apt-get install -y \
-    python3.10 \
-    python3-pip \
     git \
     openssh-client \
+    wget \
+    curl \
+    gcc \
+    g++ \
+    make \
+    build-essential \
+    cmake \
+    vim \
+    htop \
+    libblas3 \
+    liblapack3 \
+    liblapack-dev \
+    libblas-dev \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
+
+# Set CUDA environment variables
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=${CUDA_HOME}/bin:${PATH}
+ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
     
 
 # Set python3 as the default python
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
-# Create a working directory. This is where the code will be cloned.
+# Create a working directory and copy necessary files.
 WORKDIR /app
-
-# Copy the requirements file.
 COPY requirements.txt .
-COPY train.py .
+COPY start_training.sh .
 
-# Upgrade pip and install packages from requirements.txt in a single layer
-# This is more robust and creates a smaller image.
+# Grant execution permissions to the start_training.sh script
+RUN chmod +x start_training.sh
+
+# Upgrade pip and install all Python packages from the requirements file in a single, efficient layer.
+# This approach minimizes image size and build time by caching the dependencies.
 RUN python3 -m pip install --no-cache-dir --upgrade pip && \
     python3 -m pip install --no-cache-dir -r requirements.txt

@@ -1,0 +1,5 @@
+training/.env
+__pycache__/
+.buildx-cache/
+.venv/
+.claude/
