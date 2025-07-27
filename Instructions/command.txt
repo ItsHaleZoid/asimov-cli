@@ -1,7 +1,7 @@
 python main.py --config my_job.yaml
 
 
-
+  python main.py --debug
 tail -f /app/training.log
 
 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

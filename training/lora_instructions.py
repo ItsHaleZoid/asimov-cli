@@ -31,16 +31,6 @@ MODULE_PATTERNS = {
                     "dense_4h_to_h", "fc_in", "fc_out", "mlp", "feedforward", "feed_forward"],
         "weight": 1.0
     },
-    "embedding": {
-        "keywords": ["embed", "embedding", "token", "position", "pos_emb", "word_embeddings",
-                    "positional_embeddings", "token_embeddings", "wte", "wpe"],
-        "weight": 0.9  # Increased weight for embeddings
-    },
-    "normalization": {
-        "keywords": ["norm", "layer_norm", "ln", "batch_norm", "bn", "group_norm", "rms_norm",
-                    "input_layernorm", "post_attention_layernorm", "final_layer_norm"],
-        "weight": 0.8  # Increased weight for normalization layers
-    },
     "output": {
         "keywords": ["output", "head", "classifier", "lm_head", "prediction", "score", "logits"],
         "weight": 0.9  # Increased weight for output layers
@@ -147,17 +137,17 @@ def ai_infer_architecture_family(model_architecture_name: str,
         },
         "bert": {
             "patterns": ["bert", "roberta", "electra", "deberta", "albert"],
-            "module_indicators": ["query", "key", "value", "dense", "LayerNorm"],
+            "module_indicators": ["query", "key", "value", "dense"],
             "confidence": 0.8
         },
         "gpt": {
             "patterns": ["gpt", "codegen", "starcoder", "santacoder"],
-            "module_indicators": ["c_attn", "c_proj", "c_fc", "wte", "wpe", "ln_1", "ln_2"],
+            "module_indicators": ["c_attn", "c_proj", "c_fc"],
             "confidence": 0.8
         },
         "t5": {
             "patterns": ["t5", "flan", "ul2", "longt5"],
-            "module_indicators": ["q", "k", "v", "o", "wi", "wo", "layer_norm"],
+            "module_indicators": ["q", "k", "v", "o", "wi", "wo"],
             "confidence": 0.8
         },
         "falcon": {
@@ -253,14 +243,6 @@ def ai_generate_target_modules(model_architecture_name: str,
     if "mlp" in categorized:
         target_modules.extend(categorized["mlp"])
     
-    # Add embedding modules (medium priority) if reasonable number
-    if "embedding" in categorized and len(categorized["embedding"]) <= 3:
-        target_modules.extend(categorized["embedding"])
-    
-    # Add normalization modules (lower priority) if small number
-    if "normalization" in categorized and len(categorized["normalization"]) <= 2:
-        target_modules.extend(categorized["normalization"])
-    
     # If we don't have enough modules, add some unknowns with attention-like patterns
     if len(target_modules) < 4 and "unknown" in categorized:
         for module in categorized["unknown"]:
@@ -301,10 +283,10 @@ def get_lora_rank_recommendations(model_architecture: str, param_count: Optional
         Dict[str, int]: Recommended ranks for different module types
     """
     base_ranks = {
-        "small": {"attention": 16, "mlp": 32, "embedding": 16, "normalization": 8, "output": 16},
-        "medium": {"attention": 32, "mlp": 64, "embedding": 32, "normalization": 16, "output": 32},
-        "large": {"attention": 64, "mlp": 128, "embedding": 64, "normalization": 32, "output": 64},
-        "xlarge": {"attention": 128, "mlp": 256, "embedding": 128, "normalization": 64, "output": 128}
+        "small": {"attention": 16, "mlp": 32, "output": 16},
+        "medium": {"attention": 32, "mlp": 64, "output": 32},
+        "large": {"attention": 64, "mlp": 128, "output": 64},
+        "xlarge": {"attention": 128, "mlp": 256, "output": 128}
     }
     
     # Determine size category
@@ -346,603 +328,426 @@ MODEL_TARGETS = {
     # --- A ---
     "AlbertForMaskedLM": {
         "attention": ["query", "key", "value", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings", "token_type_embeddings"],
-        "normalization": ["LayerNorm"]
+        "mlp": ["dense"]
     },
     "AlbertForSequenceClassification": {
         "attention": ["query", "key", "value", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings", "token_type_embeddings"],
-        "normalization": ["LayerNorm"],
+        "mlp": ["dense"],
         "output": ["classifier"]
     },
     "AutoformerForPrediction": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["fc1", "fc2"],
-        "normalization": ["norm1", "norm2"]
+        "mlp": ["fc1", "fc2"]
     },
     "AquilaForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
 
     # --- B ---
     "BartForConditionalGeneration": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["fc1", "fc2"],
-        "embedding": ["embed_tokens", "embed_positions"],
-        "normalization": ["self_attn_layer_norm", "final_layer_norm"]
+        "mlp": ["fc1", "fc2"]
     },
     "BartForSequenceClassification": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
         "mlp": ["fc1", "fc2"],
-        "embedding": ["embed_tokens", "embed_positions"],
-        "normalization": ["self_attn_layer_norm", "final_layer_norm"],
         "output": ["classification_head"]
     },
     "BertForMaskedLM": {
         "attention": ["query", "key", "value", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings", "token_type_embeddings"],
-        "normalization": ["LayerNorm"],
+        "mlp": ["dense"],
         "output": ["cls"]
     },
     "BertForSequenceClassification": {
         "attention": ["query", "key", "value", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings", "token_type_embeddings"],
-        "normalization": ["LayerNorm"],
+        "mlp": ["dense"],
         "output": ["classifier"]
     },
     "BertForQuestionAnswering": {
         "attention": ["query", "key", "value", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings", "token_type_embeddings"],
-        "normalization": ["LayerNorm"],
+        "mlp": ["dense"],
         "output": ["qa_outputs"]
     },
     "BigBirdForMaskedLM": {
         "attention": ["query", "key", "value", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings"],
-        "normalization": ["LayerNorm"]
+        "mlp": ["dense"]
     },
     "BlenderbotForConditionalGeneration": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["fc1", "fc2"],
-        "embedding": ["embed_tokens", "embed_positions"],
-        "normalization": ["self_attn_layer_norm", "final_layer_norm"]
+        "mlp": ["fc1", "fc2"]
     },
     "BloomForCausalLM": {
         "attention": ["query_key_value", "dense"],
-        "mlp": ["dense_h_to_4h", "dense_4h_to_h"],
-        "embedding": ["word_embeddings"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "ln_f"]
+        "mlp": ["dense_h_to_4h", "dense_4h_to_h"]
     },
     "BloomForSequenceClassification": {
         "attention": ["query_key_value", "dense"],
         "mlp": ["dense_h_to_4h", "dense_4h_to_h"],
-        "embedding": ["word_embeddings"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "ln_f"],
         "output": ["score"]
     },
     "BaiChuanForCausalLM": {
         "attention": ["W_pack", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
 
     # --- C ---
     "CodeGenForCausalLM": {
         "attention": ["qkv_proj", "out_proj"],
-        "mlp": ["fc_in", "fc_out"],
-        "embedding": ["wte", "wpe"],
-        "normalization": ["ln_1", "ln_2", "ln_f"]
+        "mlp": ["fc_in", "fc_out"]
     },
     "CodeLlamaForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "CLIPVisionModel": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["fc1", "fc2"],
-        "embedding": ["class_embedding", "position_embedding"],
-        "normalization": ["layer_norm1", "layer_norm2", "pre_layrnorm", "post_layernorm"]
+        "mlp": ["fc1", "fc2"]
     },
     "CLIPTextModel": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["fc1", "fc2"],
-        "embedding": ["token_embedding", "position_embedding"],
-        "normalization": ["layer_norm1", "layer_norm2", "final_layer_norm"]
+        "mlp": ["fc1", "fc2"]
     },
     "ChatGLMForConditionalGeneration": {
         "attention": ["query_key_value", "dense"],
-        "mlp": ["dense_h_to_4h", "dense_4h_to_h"],
-        "embedding": ["word_embeddings"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "final_layernorm"]
+        "mlp": ["dense_h_to_4h", "dense_4h_to_h"]
     },
     "CohereForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
 
     # --- D ---
     "Data2VecVisionForImageClassification": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
         "mlp": ["fc1", "fc2"],
-        "embedding": ["embeddings"],
-        "normalization": ["layernorm_before", "layernorm_after"],
         "output": ["classifier"]
     },
     "DebertaV2ForMaskedLM": {
         "attention": ["query_proj", "key_proj", "value_proj", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings"],
-        "normalization": ["LayerNorm"]
+        "mlp": ["dense"]
     },
     "DebertaV2ForSequenceClassification": {
         "attention": ["query_proj", "key_proj", "value_proj", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings"],
-        "normalization": ["LayerNorm"],
+        "mlp": ["dense"],
         "output": ["classifier"]
     },
     "DeepseekV3ForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "DistilBertForMaskedLM": {
         "attention": ["q_lin", "k_lin", "v_lin", "out_lin"],
-        "mlp": ["ffn", "lin1", "lin2"],
-        "embedding": ["word_embeddings", "position_embeddings"],
-        "normalization": ["sa_layer_norm", "output_layer_norm"]
+        "mlp": ["ffn", "lin1", "lin2"]
     },
     "DistilBertForSequenceClassification": {
         "attention": ["q_lin", "k_lin", "v_lin", "out_lin"],
         "mlp": ["ffn", "lin1", "lin2"],
-        "embedding": ["word_embeddings", "position_embeddings"],
-        "normalization": ["sa_layer_norm", "output_layer_norm"],
         "output": ["classifier"]
     },
     "DptForDepthEstimation": {
         "attention": ["query", "key", "value"],
-        "mlp": ["dense"],
-        "embedding": ["embeddings"],
-        "normalization": ["layernorm_before", "layernorm_after"]
+        "mlp": ["dense"]
     },
 
     # --- E ---
     "ElectraForMaskedLM": {
         "attention": ["query", "key", "value", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings", "token_type_embeddings"],
-        "normalization": ["LayerNorm"]
+        "mlp": ["dense"]
     },
     "ElectraForSequenceClassification": {
         "attention": ["query", "key", "value", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings", "token_type_embeddings"],
-        "normalization": ["LayerNorm"],
+        "mlp": ["dense"],
         "output": ["classifier"]
     },
     
     # --- F ---
     "FalconForCausalLM": {
         "attention": ["query_key_value", "dense"],
-        "mlp": ["dense_h_to_4h", "dense_4h_to_h"],
-        "embedding": ["word_embeddings"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "ln_f"]
+        "mlp": ["dense_h_to_4h", "dense_4h_to_h"]
     },
     "FlanT5ForConditionalGeneration": {
         "attention": ["q", "k", "v", "o"],
-        "mlp": ["wi", "wo", "wi_0", "wi_1"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["layer_norm", "final_layer_norm"]
+        "mlp": ["wi", "wo", "wi_0", "wi_1"]
     },
     "FuyuForCausalLM": {
         "attention": ["query_key_value", "dense"],
-        "mlp": ["dense_h_to_4h", "dense_4h_to_h"],
-        "embedding": ["word_embeddings"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["dense_h_to_4h", "dense_4h_to_h"]
     },
 
     # --- G ---
     "GemmaForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "Gemma2ForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "GPT2LMHeadModel": {
         "attention": ["c_attn", "c_proj"],
-        "mlp": ["c_fc", "c_proj"],
-        "embedding": ["wte", "wpe"],
-        "normalization": ["ln_1", "ln_2", "ln_f"]
+        "mlp": ["c_fc", "c_proj"]
     },
     "GPT2ForSequenceClassification": {
         "attention": ["c_attn", "c_proj"],
         "mlp": ["c_fc", "c_proj"],
-        "embedding": ["wte", "wpe"],
-        "normalization": ["ln_1", "ln_2", "ln_f"],
         "output": ["score"]
     },
     "GPTJForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["fc_in", "fc_out"],
-        "embedding": ["wte"],
-        "normalization": ["ln_1", "ln_f"]
+        "mlp": ["fc_in", "fc_out"]
     },
     "GPTNeoForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["c_fc", "c_proj"],
-        "embedding": ["wte", "wpe"],
-        "normalization": ["ln_1", "ln_2", "ln_f"]
+        "mlp": ["c_fc", "c_proj"]
     },
     "GPTNeoXForCausalLM": {
         "attention": ["query_key_value", "dense"],
-        "mlp": ["dense_h_to_4h", "dense_4h_to_h"],
-        "embedding": ["embed_in"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "final_layer_norm"]
+        "mlp": ["dense_h_to_4h", "dense_4h_to_h"]
     },
     "GLMForCausalLM": {
         "attention": ["query_key_value", "dense"],
-        "mlp": ["dense_h_to_4h", "dense_4h_to_h"],
-        "embedding": ["word_embeddings"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["dense_h_to_4h", "dense_4h_to_h"]
     },
 
     # --- H ---
     "HermesChatModel": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
 
     # --- I ---
     "IdeficsForVisionText2Text": {
         "attention": ["q_proj", "k_proj", "v_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "InternLMForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "InternLM2ForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
 
     # --- J ---
     "Jamba": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
 
     # --- K ---
     "KimiForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
 
     # --- L ---
     "LlamaForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "Llama2ForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "Llama3ForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "LongT5ForConditionalGeneration": {
         "attention": ["q", "k", "v", "o"],
-        "mlp": ["wi", "wo", "wi_0", "wi_1"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["layer_norm", "final_layer_norm"]
+        "mlp": ["wi", "wo", "wi_0", "wi_1"]
     },
     "LlaVAForConditionalGeneration": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     
     # --- M ---
     "M2M100ForConditionalGeneration": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["fc1", "fc2"],
-        "embedding": ["embed_tokens", "embed_positions"],
-        "normalization": ["self_attn_layer_norm", "final_layer_norm"]
+        "mlp": ["fc1", "fc2"]
     },
     "MBartForConditionalGeneration": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["fc1", "fc2"],
-        "embedding": ["embed_tokens", "embed_positions"],
-        "normalization": ["self_attn_layer_norm", "final_layer_norm"]
+        "mlp": ["fc1", "fc2"]
     },
     "MistralForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "Mistral7BForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "MixtralForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["w1", "w2", "w3"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["w1", "w2", "w3"]
     },
     "MptForCausalLM": {
         "attention": ["Wqkv", "out_proj"],
-        "mlp": ["up_proj", "down_proj"],
-        "embedding": ["wte", "wpe"],
-        "normalization": ["norm_1", "norm_2", "norm_f"]
+        "mlp": ["up_proj", "down_proj"]
     },
     "MPTForCausalLM": {
         "attention": ["Wqkv", "out_proj"],
-        "mlp": ["up_proj", "down_proj"],
-        "embedding": ["wte", "wpe"],
-        "normalization": ["norm_1", "norm_2", "norm_f"]
+        "mlp": ["up_proj", "down_proj"]
     },
 
     # --- N ---
     "NemotronForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
 
     # --- O ---
     "OPTForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["fc1", "fc2"],
-        "embedding": ["embed_tokens", "embed_positions"],
-        "normalization": ["self_attn_layer_norm", "final_layer_norm"]
+        "mlp": ["fc1", "fc2"]
     },
     "OlmoForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
 
     # --- P ---
     "PegasusForConditionalGeneration": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["fc1", "fc2"],
-        "embedding": ["embed_tokens", "embed_positions"],
-        "normalization": ["self_attn_layer_norm", "final_layer_norm"]
+        "mlp": ["fc1", "fc2"]
     },
     "PhiForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "dense"],
-        "mlp": ["fc1", "fc2"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "final_layernorm"]
+        "mlp": ["fc1", "fc2"]
     },
     "Phi3ForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "PersimmonForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     
     # --- Q ---
     "Qwen2ForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "QwenForCausalLM": {
         "attention": ["c_attn", "c_proj"],
-        "mlp": ["w1", "w2"],
-        "embedding": ["wte"],
-        "normalization": ["ln_1", "ln_2", "ln_f"]
+        "mlp": ["w1", "w2"]
     },
     "Qwen2VLForConditionalGeneration": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
 
     # --- R ---
     "RobertaForMaskedLM": {
         "attention": ["query", "key", "value", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings", "token_type_embeddings"],
-        "normalization": ["LayerNorm"]
+        "mlp": ["dense"]
     },
     "RobertaForSequenceClassification": {
         "attention": ["query", "key", "value", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings", "token_type_embeddings"],
-        "normalization": ["LayerNorm"],
+        "mlp": ["dense"],
         "output": ["classifier"]
     },
     "RobertaForQuestionAnswering": {
         "attention": ["query", "key", "value", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings", "token_type_embeddings"],
-        "normalization": ["LayerNorm"],
+        "mlp": ["dense"],
         "output": ["qa_outputs"]
     },
 
     # --- S ---
     "StableLmForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "SwinForImageClassification": {
         "attention": ["query", "key", "value"],
         "mlp": ["dense"],
-        "embedding": ["embeddings"],
-        "normalization": ["norm"],
         "output": ["classifier"]
     },
     "SolarForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     "StarcoderForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["c_fc", "c_proj"],
-        "embedding": ["wte", "wpe"],
-        "normalization": ["ln_1", "ln_2", "ln_f"]
+        "mlp": ["c_fc", "c_proj"]
     },
 
     # --- T ---
     "T5ForConditionalGeneration": {
         "attention": ["q", "k", "v", "o"],
-        "mlp": ["wi", "wo", "wi_0", "wi_1"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["layer_norm", "final_layer_norm"]
+        "mlp": ["wi", "wo", "wi_0", "wi_1"]
     },
     "T5ForSequenceClassification": {
         "attention": ["q", "k", "v", "o"],
         "mlp": ["wi", "wo", "wi_0", "wi_1"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["layer_norm", "final_layer_norm"],
         "output": ["classifier"]
     },
     
     # --- U ---
     "UL2ForConditionalGeneration": {
         "attention": ["q", "k", "v", "o"],
-        "mlp": ["wi", "wo", "wi_0", "wi_1"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["layer_norm", "final_layer_norm"]
+        "mlp": ["wi", "wo", "wi_0", "wi_1"]
     },
 
     # --- V ---
     "ViTForImageClassification": {
         "attention": ["query", "key", "value"],
         "mlp": ["dense"],
-        "embedding": ["embeddings"],
-        "normalization": ["layernorm_before", "layernorm_after"],
         "output": ["classifier"]
     },
     "VicunaForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
     
     # --- W ---
     "Wav2Vec2ForCTC": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "embedding": ["feature_projection"],
-        "normalization": ["layer_norm"],
         "output": ["lm_head"]
     },
     "WhisperForConditionalGeneration": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["fc1", "fc2"],
-        "embedding": ["embed_tokens", "embed_positions"],
-        "normalization": ["self_attn_layer_norm", "final_layer_norm"]
+        "mlp": ["fc1", "fc2"]
     },
     "WizardLMForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
 
     # --- X ---
     "XGLMForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "out_proj"],
-        "mlp": ["fc1", "fc2"],
-        "embedding": ["embed_tokens", "embed_positions"],
-        "normalization": ["self_attn_layer_norm", "final_layer_norm"]
+        "mlp": ["fc1", "fc2"]
     },
     "XLMForMaskedLM": {
         "attention": ["q_lin", "k_lin", "v_lin"],
-        "mlp": ["lin1", "lin2"],
-        "embedding": ["embeddings"],
-        "normalization": ["layer_norm1", "layer_norm2"]
+        "mlp": ["lin1", "lin2"]
     },
     "XLMRobertaForMaskedLM": {
         "attention": ["query", "key", "value", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings"],
-        "normalization": ["LayerNorm"]
+        "mlp": ["dense"]
     },
     "XLMRobertaForSequenceClassification": {
         "attention": ["query", "key", "value", "dense"],
-        "mlp": ["dense", "LayerNorm"],
-        "embedding": ["word_embeddings", "position_embeddings"],
-        "normalization": ["LayerNorm"],
+        "mlp": ["dense"],
         "output": ["classifier"]
     },
 
     # --- Y ---
     "YiForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm", "norm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
 
     # --- Z ---
     "ZephyrForCausalLM": {
         "attention": ["q_proj", "k_proj", "v_proj", "o_proj"],
-        "mlp": ["gate_proj", "up_proj", "down_proj"],
-        "embedding": ["embed_tokens"],
-        "normalization": ["input_layernorm", "post_attention_layernorm"]
+        "mlp": ["gate_proj", "up_proj", "down_proj"]
     },
 }
 
@@ -966,7 +771,7 @@ def get_target_modules(model_architecture_name: str, target_type: str = "all",
 
     Args:
         model_architecture_name (str): The official architecture name from the model's config.json.
-        target_type (str): One of "all", "attention", "mlp", "embedding", "normalization", or "output".
+        target_type (str): One of "all", "attention", "mlp", or "output".
         model_state_dict (Optional[Dict[str, Any]]): Model state dict for AI inference if needed.
 
     Returns:
@@ -1020,7 +825,7 @@ def get_target_modules(model_architecture_name: str, target_type: str = "all",
         return all_modules
 
 def infer_target_modules_from_model(model_state_dict: Dict[str, Any], 
-                                   filter_types: List[str] = ["attention", "mlp", "embedding", "normalization"]) -> Dict[str, List[str]]:
+                                   filter_types: List[str] = ["attention", "mlp"]) -> Dict[str, List[str]]:
     """
     Uses ML-based classification to automatically infer target modules from a model's state dict.
     
@@ -1121,10 +926,6 @@ def get_optimal_lora_config(model_architecture: str,
         rank = recommended_ranks["attention"]
     elif target_type == "mlp":
         rank = recommended_ranks["mlp"]
-    elif target_type == "embedding":
-        rank = recommended_ranks["embedding"]
-    elif target_type == "normalization":
-        rank = recommended_ranks["normalization"]
     else:
         # For "all" or mixed targeting, use the highest rank for best quality
         rank = max(recommended_ranks.values())
@@ -1248,5 +1049,5 @@ if __name__ == '__main__':
     
     # Test comprehensive targeting
     inferred = infer_target_modules_from_model(fake_state_dict, 
-                                             filter_types=["attention", "mlp", "embedding", "normalization", "output"])
+                                             filter_types=["attention", "mlp", "output"])
     print(f"Inferred comprehensive targets: {inferred}")

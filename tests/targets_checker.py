@@ -6,7 +6,7 @@ from huggingface_hub import login
 def check_lora_targets():
     """Check potential LoRA target modules for a model."""
     # Hardcoded model ID and HF token from my_job.yaml
-    model_id = "mistralai/Mistral-7B-Instruct-v0.3"
+    model_id = "MistralAI/Mistral-7B-Instruct-v0.1"
     print("Logging in to Hugging Face...")
     login("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")
 
