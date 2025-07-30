@@ -4,39 +4,39 @@ import time
 import os
 
 def search_cheapest_instance(gpu_name="H100 NVL", num_gpus=1):
-    """Searches for the cheapest available spot instance on Vast.ai."""
-    print(f"--> Searching for the cheapest {num_gpus}x {gpu_name} spot instance...")
+    """Searches for the cheapest available interruptible instance on Vast.ai."""
+    print(f"--> Searching for the cheapest {num_gpus}x {gpu_name} interruptible instance...")
     
     # Start with the most restrictive search, then progressively relax criteria
     search_strategies = [
         # Strategy 1: Strict requirements
         {
-            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true verified=true reliability>=0.95 disk_space>=50',
+            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true reliability>=0.95 disk_space>=100',
             "description": "strict criteria"
         },
         # Strategy 2: Relax verification and reliability
         {
-            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true reliability>=0.8 disk_space>=30',
+            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true reliability>=0.8 disk_space>=100',
             "description": "relaxed verification"
         },
         # Strategy 3: Just disk space and basic requirements
         {
-            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true disk_space>=20',
+            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true disk_space>=100',
             "description": "minimal disk space"
         },
         # Strategy 4: Only GPU and rentable requirements
         {
-            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true',
+            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true disk_space>=100',
             "description": "basic requirements only"
         },
         # Strategy 5: Target the specific cheap H100 NVL instances from the image
         {
-            "criteria": f'num_gpus={num_gpus} gpu_name="H100 NVL" rentable=true dph_total<=0.5',
+            "criteria": f'num_gpus={num_gpus} gpu_name="H100 NVL" rentable=true dph_total<=0.5 disk_space>=100',
             "description": "ultra-cheap H100 NVL instances (under $0.50/hr)"
         },
         # Strategy 6: Broader price range for H100 NVL instances
         {
-            "criteria": f'num_gpus={num_gpus} gpu_name="H100 NVL" rentable=true dph_total<=1.0',
+            "criteria": f'num_gpus={num_gpus} gpu_name="H100 NVL" rentable=true dph_total<=1.0 disk_space>=100',
             "description": "cheap H100 NVL instances (under $1.00/hr)"
         },
         # Strategy 7: Fuzzy GPU name matching (in case exact name doesn't work)
@@ -46,12 +46,12 @@ def search_cheapest_instance(gpu_name="H100 NVL", num_gpus=1):
         },
         # Strategy 8: Alternative GPU names that might be cheaper
         {
-            "criteria": f'num_gpus={num_gpus} (gpu_name="RTX 4090" OR gpu_name="RTX 3090" OR gpu_name="A100" OR gpu_name="V100") rentable=true',
+            "criteria": f'num_gpus={num_gpus} (gpu_name="RTX 4090" OR gpu_name="RTX 3090" OR gpu_name="A100" OR gpu_name="V100") rentable=true disk_space>=100',
             "description": "alternative high-end GPUs"
         },
         # Strategy 9: Cast wider net with any modern GPU
         {
-            "criteria": f'num_gpus={num_gpus} (gpu_name~="RTX" OR gpu_name~="A100" OR gpu_name~="H100" OR gpu_name~="V100") rentable=true',
+            "criteria": f'num_gpus={num_gpus} (gpu_name~="RTX" OR gpu_name~="A100" OR gpu_name~="H100" OR gpu_name~="V100") rentable=true disk_space>=100',
             "description": "any modern GPU"
         }
     ]
@@ -62,6 +62,7 @@ def search_cheapest_instance(gpu_name="H100 NVL", num_gpus=1):
         command = [
             "vastai", "search", "offers",
             strategy["criteria"],
+            "--interruptible",
             "--order", "dph_total asc",
             "--raw"
         ]
@@ -87,19 +88,23 @@ def search_cheapest_instance(gpu_name="H100 NVL", num_gpus=1):
                         print(f"    Option {i+1}: Instance {instance['id']} - ${instance['dph_total']}/hr - {gpu_info} (reliability: {reliability:.2f})")
                     
                     cheapest = instances[0]
-                    print(f"--> Selected cheapest: Instance {cheapest['id']} at ${cheapest['dph_total']}/hr")
-                    return cheapest['id']
+                    recommended_price = float(cheapest.get('min_bid', cheapest['dph_total']))
+                    bid_price = recommended_price + (recommended_price * 0.50)  # Add 5% buffer
+                    print(f"--> Selected cheapest: Instance {cheapest['id']}")
+                    print(f"    Recommended price: ${recommended_price:.4f}/hr")
+                    print(f"    Our bid: ${bid_price:.4f}/hr (recommended + 25%)")
+                    return cheapest['id'], bid_price
                     
         except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
             print(f"    Search failed: {e}")
             continue
     
     print("--> No suitable instances found with any search strategy.")
-    return None
+    return None, None
 
-def create_instance(instance_id, docker_image, env_vars, local_train_script="training/train.py"):
-    """Creates a Vast.ai instance and uploads local training script."""
-    print(f"--> Attempting to create instance {instance_id}...")
+def create_instance(instance_id, docker_image, env_vars, bid_price, local_train_script="training/train.py"):
+    """Creates a Vast.ai instance by placing a bid and uploads local training script."""
+    print(f"--> Attempting to create instance {instance_id} with bid ${bid_price:.4f}/hr...")
     
     existing_instances = get_running_instances()
     if existing_instances:
@@ -107,11 +112,12 @@ def create_instance(instance_id, docker_image, env_vars, local_train_script="tra
         for existing_id in existing_instances:
             destroy_instance(existing_id)
 
-    # Create instance - Vast.ai doesn't support -e flags, we'll set env vars via SSH later
+    # Create instance with bid - Always start with 100 GB disk space
     command = [
         "vastai", "create", "instance", str(instance_id),
         "--image", docker_image,
-        "--disk", "50",
+        "--disk", "250",
+        "--bid", str(bid_price),
         "--raw"
     ]
              
@@ -131,14 +137,20 @@ def create_instance(instance_id, docker_image, env_vars, local_train_script="tra
                 if upload_file_to_instance(new_id, local_train_script, "/app/train.py"):
                     # Also upload the lora_instructions.py file (force overwrite)
                     if upload_file_to_instance(new_id, "training/lora_instructions.py", "/app/lora_instructions.py"):
-                        # Set environment variables and start training
-                        env_exports = " && ".join([f"export {key}={value}" for key, value in env_vars.items()])
-                        start_training_command = f"cd /app && {env_exports} && python train.py"
-                        if execute_command_on_instance(new_id, start_training_command):
-                            print(f"--> Training started successfully on instance {new_id}!")
-                            return new_id
+                        # Upload the training_test.py file as well
+                        if upload_file_to_instance(new_id, "tests/training_test.py", "/app/training_test.py"):
+                            # Set environment variables but don't start training automatically
+                            env_exports = " && ".join([f"export {key}={value}" for key, value in env_vars.items()])
+                            setup_command = f"cd /app && {env_exports} && echo 'Environment variables set successfully'"
+                            if execute_command_on_instance(new_id, setup_command):
+                                print(f"--> Instance {new_id} is ready for training!")
+                                print(f"--> To manually start training, run: vastai ssh {new_id} 'cd /app && python train.py'")
+                                return new_id
+                            else:
+                                print(f"--> Failed to setup environment on instance {new_id}")
+                                return None
                         else:
-                            print(f"--> Failed to start training on instance {new_id}")
+                            print(f"--> Failed to upload training_test.py to instance {new_id}")
                             return None
                     else:
                         print(f"--> Failed to upload lora_instructions.py to instance {new_id}")
@@ -241,24 +253,31 @@ def execute_command_on_instance(instance_id, command):
         print(f"--> Could not get SSH info for instance {instance_id}")
         return False
     
-    print(f"--> Starting training on instance {instance_id}...")
+    print(f"--> Executing command on instance {instance_id}...")
     
     try:
         # Create a simple startup script and run it
+
+
+
+       
+
+
+
         startup_script = f'''#!/bin/bash
-echo "=== Training startup script started ===" >> /app/training.log 2>&1
+echo "=== Setup script started ===" >> /app/setup.log 2>&1
 cd /app
-echo "Working directory: $(pwd)" >> /app/training.log 2>&1
-echo "Files in /app:" >> /app/training.log 2>&1
-ls -la /app >> /app/training.log 2>&1
-echo "Environment variables:" >> /app/training.log 2>&1
-env | grep -E "(HF_TOKEN|BASE_MODEL|DATASET|LORA)" >> /app/training.log 2>&1
-echo "=== Installing additional packages ===" >> /app/training.log 2>&1
-python -m pip install protobuf einops sentencepiece accelerate bitsandbytes deepspeed xformers >> /app/training.log 2>&1
+echo "Working directory: $(pwd)" >> /app/setup.log 2>&1
+echo "Files in /app:" >> /app/setup.log 2>&1
+ls -la /app >> /app/setup.log 2>&1
+echo "Environment variables:" >> /app/setup.log 2>&1
+env | grep -E "(HF_TOKEN|BASE_MODEL|DATASET|LORA)" >> /app/setup.log 2>&1
+echo "=== Installing additional packages ===" >> /app/setup.log 2>&1
+python -m pip install --no-cache-dir git+https://github.com/huggingface/transformers.git tiktoken blobfile>> /app/setup.log 2>&1
 export WANDB_DISABLED="true"
-echo "=== Starting Python training ===" >> /app/training.log 2>&1
-{command} >> /app/training.log 2>&1 &
-echo "Training process started with PID: $!" >> /app/training.log 2>&1
+echo "=== Executing command ===" >> /app/setup.log 2>&1
+{command} >> /app/setup.log 2>&1
+echo "Command execution completed" >> /app/setup.log 2>&1
 
 '''
         
@@ -273,19 +292,17 @@ echo "Training process started with PID: $!" >> /app/training.log 2>&1
         result = subprocess.run(ssh_command, capture_output=True, text=True, timeout=20)
         
         if result.returncode == 0:
-            print(f"--> Training startup script executed successfully")
-            print(f"--> Training is now running in background")
+            print(f"--> Command executed successfully")
         else:
-            print(f"--> Error executing startup script: {result.stderr}")
+            print(f"--> Error executing command: {result.stderr}")
             
-        print(f"--> Monitor progress with:")
-        print(f"   vastai ssh {instance_id} 'tail -f /app/training.log'")
-        print(f"   or check: vastai ssh {instance_id} 'cat /app/training.log'")
+        print(f"--> Check logs with:")
+        print(f"   vastai ssh {instance_id} 'cat /app/setup.log'")
         return True
         
     except subprocess.TimeoutExpired:
-        print(f"--> Startup script sent (timeout expected)")
-        print(f"--> Check logs: vastai ssh {instance_id} 'tail -f /app/training.log'")
+        print(f"--> Command sent (timeout expected)")
+        print(f"--> Check logs: vastai ssh {instance_id} 'cat /app/setup.log'")
         return True
         
     except Exception as e:

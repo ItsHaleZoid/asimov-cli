@@ -54,7 +54,7 @@ def run_tuning_job(config):
     print(f"--> Using Docker image: {docker_image}")
     print(f"--> Will upload local training script: training/train.py")
     
-    instance_id = vast_manager.search_cheapest_instance(
+    instance_id, bid_price = vast_manager.search_cheapest_instance(
         gpu_name=config['gpu_name'],
         num_gpus=config['num_gpus']
     )
@@ -75,12 +75,15 @@ def run_tuning_job(config):
         "LORA_MODEL_REPO": config['lora_model_repo'],
         "LORA_TARGET_MODULES": lora_target_modules,
     }
+
+    if config.get('max_train_steps'):
+        env_vars["MAX_TRAIN_STEPS"] = str(config['max_train_steps'])
     
     if 'dataset_subset' in config and config['dataset_subset']:
         env_vars["DATASET_SUBSET"] = config['dataset_subset']
     print(f"--> Prepared environment variables for the job.")
 
-    new_instance_id = vast_manager.create_instance(instance_id, docker_image, env_vars)
+    new_instance_id = vast_manager.create_instance(instance_id, docker_image, env_vars, bid_price)
     if not new_instance_id:
         print("--- Job Failed: Could not create the instance. Exiting. ---")
         return

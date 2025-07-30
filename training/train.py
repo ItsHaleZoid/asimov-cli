@@ -1,4 +1,5 @@
 import os
+import torch
 from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -11,10 +12,18 @@ from peft import LoraConfig, get_peft_model
 def main():
     print("--- Training Script Started ---")
     
+    # Force CUDA usage
+    if not torch.cuda.is_available():
+        print("❌ CUDA is not available! This script requires CUDA.")
+        return
+    
+    print(f"✅ CUDA is available. Using device: {torch.cuda.get_device_name()}")
+    torch.cuda.empty_cache()  # Clear CUDA cache
+    
     # Enable verbose HF Hub logging
     os.environ["HF_HUB_VERBOSITY"] = "info"
     os.environ["TRANSFORMERS_VERBOSITY"] = "info"
-    
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
     
     # --- Read configuration from environment variables ---
@@ -46,11 +55,12 @@ def main():
             print(f"Attempt {attempt + 1}/{max_retries} to load model...")
             model = AutoModelForCausalLM.from_pretrained(
                 base_model_id,
-                torch_dtype="auto",
-                device_map="auto",
+                torch_dtype=torch.float16,
+                device_map="cuda",
                 token=hf_token,
                 attn_implementation="sdpa",
                 resume_download=True,
+                trust_remote_code=True,
             )
             print("✅ Model loaded successfully!")
             break
@@ -64,7 +74,7 @@ def main():
                 print("All model loading attempts failed!")
                 return
     
-    tokenizer = AutoTokenizer.from_pretrained(base_model_id, token=hf_token)
+    tokenizer = AutoTokenizer.from_pretrained(base_model_id, token=hf_token, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
     print("✅ Tokenizer loaded successfully!")
 
@@ -118,7 +128,13 @@ def main():
     dataset = dataset.map(format_prompt)
     
     def tokenize_function(examples):
-        return tokenizer(examples["text"], truncation=True, padding=False, max_length=2048)
+        tokens = tokenizer(examples["text"], truncation=True, padding=False, max_length=2048)
+        # Ensure all token IDs are within vocabulary bounds
+        vocab_size = model.config.vocab_size
+        for key in tokens:
+            if key == 'input_ids':
+                tokens[key] = [[min(max(token_id, 0), vocab_size-1) for token_id in seq] for seq in tokens[key]]
+        return tokens
     
     tokenized_dataset = dataset.map(tokenize_function, batched=True, remove_columns=dataset.column_names)
 

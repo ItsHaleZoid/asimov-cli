@@ -1,7 +1,18 @@
 python main.py --config my_job.yaml
 
+python main.py --config my_job.yaml --test-targets
+
 
   python main.py --debug
 tail -f /app/training.log
 
 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
+
+python /app/training_test.py 
+
+
+TEST COMMANDS:
+
+python /tests/instances/vast_cancel_all.py cancel [--force] 
+
+python tests/instances/vast_multiple_test.py 

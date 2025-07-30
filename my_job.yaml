@@ -5,11 +5,13 @@ docker_image: "halez/lora-finetuner:latest"
 hf_token: "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" 
 
 # Model and dataset details
-base_model_id: "mistralai/Mistral-7B-Instruct-v0.1"
+base_model_id: "moonshotai/Kimi-K2-Instruct"
 dataset_id: "microsoft/rStar-Coder" # Working coding dataset
 dataset_subset: "synthetic_sft" # Choose from: synthetic_sft, synthetic_rl, synthetic_rl_testcase, seed_sft, seed_testcase
-lora_model_repo: "Ihmzf/my-mistral-7b-instruct-lora" # Where to save the adapter
+lora_model_repo: "Ihmzf/my-gemma-3-4b-it-lora" # Where to save the adapter
 
 # Vast.ai GPU requirements
 gpu_name: "H100 NVL"
 num_gpus: 1
+
+max_train_steps: 20
