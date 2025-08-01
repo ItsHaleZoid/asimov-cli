@@ -2,6 +2,7 @@ import subprocess
 import json
 import time
 import os
+import threading
 
 def search_cheapest_instance(gpu_name="H100 NVL", num_gpus=1):
     """Searches for the cheapest available interruptible instance on Vast.ai."""
@@ -89,10 +90,10 @@ def search_cheapest_instance(gpu_name="H100 NVL", num_gpus=1):
                     
                     cheapest = instances[0]
                     recommended_price = float(cheapest.get('min_bid', cheapest['dph_total']))
-                    bid_price = recommended_price + (recommended_price * 0.50)  # Add 5% buffer
+                    bid_price = recommended_price * 1.50  # Add 50% buffer
                     print(f"--> Selected cheapest: Instance {cheapest['id']}")
                     print(f"    Recommended price: ${recommended_price:.4f}/hr")
-                    print(f"    Our bid: ${bid_price:.4f}/hr (recommended + 25%)")
+                    print(f"    Our bid: ${bid_price:.4f}/hr (recommended + 50%)")
                     return cheapest['id'], bid_price
                     
         except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
@@ -101,6 +102,18 @@ def search_cheapest_instance(gpu_name="H100 NVL", num_gpus=1):
     
     print("--> No suitable instances found with any search strategy.")
     return None, None
+
+def schedule_auto_shutdown(instance_id, timeout_minutes=10):
+    """Schedules automatic shutdown of instance after specified timeout."""
+    def shutdown_timer():
+        print(f"--> Auto-shutdown timer started: Instance {instance_id} will be destroyed in {timeout_minutes} minute(s)")
+        time.sleep(timeout_minutes * 60)
+        print(f"--> Auto-shutdown triggered for instance {instance_id}")
+        destroy_instance(instance_id)
+    
+    timer_thread = threading.Thread(target=shutdown_timer, daemon=True)
+    timer_thread.start()
+    return timer_thread
 
 def create_instance(instance_id, docker_image, env_vars, bid_price, local_train_script="training/train.py"):
     """Creates a Vast.ai instance by placing a bid and uploads local training script."""
@@ -129,6 +142,9 @@ def create_instance(instance_id, docker_image, env_vars, bid_price, local_train_
             new_id = instance_info['new_contract']
             print(f"--> Successfully created instance {new_id}. Waiting for it to start...")
             
+            # Schedule auto-shutdown after 3 minutes
+            schedule_auto_shutdown(new_id, timeout_minutes=3)
+            
             # Wait for instance to be running
             if wait_for_instance_ready(new_id):
                 print(f"--> Instance {new_id} is ready!")
@@ -138,13 +154,14 @@ def create_instance(instance_id, docker_image, env_vars, bid_price, local_train_
                     # Also upload the lora_instructions.py file (force overwrite)
                     if upload_file_to_instance(new_id, "training/lora_instructions.py", "/app/lora_instructions.py"):
                         # Upload the training_test.py file as well
-                        if upload_file_to_instance(new_id, "tests/training_test.py", "/app/training_test.py"):
+                        if upload_file_to_instance(new_id, "tests/models/training_test.py", "/app/training_test.py"):
                             # Set environment variables but don't start training automatically
                             env_exports = " && ".join([f"export {key}={value}" for key, value in env_vars.items()])
                             setup_command = f"cd /app && {env_exports} && echo 'Environment variables set successfully'"
                             if execute_command_on_instance(new_id, setup_command):
                                 print(f"--> Instance {new_id} is ready for training!")
                                 print(f"--> To manually start training, run: vastai ssh {new_id} 'cd /app && python train.py'")
+                                print(f"--> WARNING: Instance will auto-shutdown in 3 minutes for testing purposes")
                                 return new_id
                             else:
                                 print(f"--> Failed to setup environment on instance {new_id}")
@@ -170,6 +187,69 @@ def create_instance(instance_id, docker_image, env_vars, bid_price, local_train_
             print(f"    Vast.ai CLI error: {e.stderr}")
         return None
 
+def create_instance_with_progress(instance_id, docker_image, env_vars, bid_price, local_train_script="training/train.py"):
+    """Enhanced create_instance with progress reporting"""
+    print(f"--> Creating instance {instance_id} with bid ${bid_price:.4f}/hr...")
+    
+    # Check and destroy existing instances
+    existing_instances = get_running_instances()
+    if existing_instances:
+        print(f"--> Found {len(existing_instances)} existing instance(s). Destroying them first...")
+        for existing_id in existing_instances:
+            destroy_instance(existing_id)
+
+    # Create instance with bid
+    command = [
+        "vastai", "create", "instance", str(instance_id),
+        "--image", docker_image,
+        "--disk", "250",
+        "--bid", str(bid_price),
+        "--raw"
+    ]
+             
+    print(f"    Running command: {' '.join(command)}")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        instance_info = json.loads(result.stdout)
+        if instance_info.get("success"):
+            new_id = instance_info['new_contract']
+            print(f"--> Instance {new_id} created successfully! Waiting for it to start...")
+            
+            # Schedule auto-shutdown after 3 minutes
+            schedule_auto_shutdown(new_id, timeout_minutes=3)
+            
+            # Wait for instance to be running with progress updates
+            if wait_for_instance_ready_with_progress(new_id):
+                print(f"--> Instance {new_id} is ready!")
+                
+                # Upload files with progress
+                print("--> Uploading training scripts...")
+                if upload_file_to_instance(new_id, local_train_script, "/app/train.py"):
+                    print("    ✓ train.py uploaded")
+                    if upload_file_to_instance(new_id, "training/lora_instructions.py", "/app/lora_instructions.py"):
+                        print("    ✓ lora_instructions.py uploaded")
+                        if upload_file_to_instance(new_id, "tests/models/training_test.py", "/app/training_test.py"):
+                            print("    ✓ training_test.py uploaded")
+                            
+                            # Set environment variables and start training
+                            print("--> Starting training process...")
+                            env_exports = " && ".join([f"export {key}={value}" for key, value in env_vars.items()])
+                            start_command = f"cd /app && {env_exports} && python train.py 2>&1 | tee training.log"
+                            
+                            if execute_command_on_instance(new_id, start_command):
+                                print(f"--> Training started on instance {new_id}")
+                                print(f"--> WARNING: Instance will auto-shutdown in 3 minutes for testing purposes")
+                                return new_id
+            
+            print(f"--> Failed to properly setup instance {new_id}")
+            return None
+        else:
+            print(f"--> Failed to create instance. Response: {instance_info}")
+            return None
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+        print(f"--> Error creating instance: {e}")
+        return None
+
 def get_running_instances():
     """Gets a list of currently running instances."""
     try:
@@ -188,24 +268,33 @@ def get_running_instances():
         print(f"--> Error getting running instances: {e}")
         return []
 
-def get_instance_ssh_info(instance_id):
-    """Gets SSH connection info for an instance."""
-    try:
-        result = subprocess.run(
-            ["vastai", "show", "instance", str(instance_id), "--raw"],
-            capture_output=True, text=True, check=True
-        )
-        instance_info = json.loads(result.stdout)
-        
-        ssh_host = instance_info.get('ssh_host')
-        ssh_port = instance_info.get('ssh_port')
-        
-        if ssh_host and ssh_port:
-            return ssh_host, ssh_port
-        return None, None
-    except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
-        print(f"--> Error getting SSH info: {e}")
-        return None, None
+def get_instance_ssh_info(instance_id, retries=5, delay=5):
+    """Gets SSH connection info for an instance with retries."""
+    for attempt in range(retries):
+        try:
+            result = subprocess.run(
+                ["vastai", "show", "instance", str(instance_id), "--raw"],
+                capture_output=True, text=True, check=True
+            )
+            instance_info = json.loads(result.stdout)
+            
+            ssh_host = instance_info.get('ssh_host')
+            ssh_port = instance_info.get('ssh_port')
+            
+            if ssh_host and ssh_port:
+                return ssh_host, ssh_port
+            
+            print(f"    SSH info not available yet. Retrying in {delay}s... (Attempt {attempt + 1}/{retries})")
+            time.sleep(delay)
+
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            print(f"--> Error getting SSH info (Attempt {attempt + 1}/{retries}): {e}")
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                return None, None
+    
+    return None, None
 
 def upload_file_to_instance(instance_id, local_file_path, remote_path="/app/"):
     """Uploads a local file to the instance via SCP, overwriting if exists."""
@@ -366,9 +455,47 @@ def wait_for_instance_ready(instance_id, timeout=300):
                 if wait_for_ssh_ready(instance_id):
                     return True
                 else:
+                    print(f"--> SSH service failed to become ready for instance {instance_id}")
                     return False
                 
             print(f"    Current status: {instance_info.get('actual_status', 'unknown')}")
+            time.sleep(10)
+            
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            print(f"    Error checking instance status: {e}")
+            time.sleep(10)
+    
+    print(f"--> Timeout waiting for instance {instance_id} to be ready")
+    return False
+
+def wait_for_instance_ready_with_progress(instance_id, timeout=300):
+    """Enhanced wait function with progress updates"""
+    print(f"--> Waiting for instance {instance_id} to be ready...")
+    start_time = time.time()
+    last_status = None
+    
+    while time.time() - start_time < timeout:
+        try:
+            result = subprocess.run(
+                ["vastai", "show", "instance", str(instance_id), "--raw"],
+                capture_output=True, text=True, check=True
+            )
+            instance_info = json.loads(result.stdout)
+            current_status = instance_info.get('actual_status', 'unknown')
+            
+            if current_status != last_status:
+                print(f"    Instance status: {current_status}")
+                last_status = current_status
+            
+            if current_status == 'running':
+                print(f"--> Instance {instance_id} is now running!")
+                # Additional wait for SSH to be ready
+                if wait_for_ssh_ready(instance_id):
+                    return True
+                else:
+                    print(f"--> SSH service failed to become ready for instance {instance_id}")
+                    return False
+                    
             time.sleep(10)
             
         except (subprocess.CalledProcessError, json.JSONDecodeError) as e:

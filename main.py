@@ -43,7 +43,7 @@ def test_target_modules(config):
     print(f"Final target modules string: {lora_target_modules}")
     print("--- Target Module Test Complete ---")
 
-def run_tuning_job(config):
+def run_tuning_job(config, callback=None):
     print("--- Starting Tuning Job ---")
     
     docker_image = config.get('docker_image')
@@ -54,19 +54,27 @@ def run_tuning_job(config):
     print(f"--> Using Docker image: {docker_image}")
     print(f"--> Will upload local training script: training/train.py")
     
+    if callback: callback("searching_gpu", 15, "Searching for available GPU...")
+    
     instance_id, bid_price = vast_manager.search_cheapest_instance(
         gpu_name=config['gpu_name'],
         num_gpus=config['num_gpus']
     )
     if not instance_id:
-        print("--- Job Failed: Could not find a suitable GPU. Exiting. ---")
-        return
+        error_msg = "--- Job Failed: Could not find a suitable GPU. Exiting. ---"
+        print(error_msg)
+        if callback: callback("failed", 0, error_msg)
+        return None
+    
+    if callback: callback("found_gpu", 20, f"Found instance {instance_id}")
     
     # Get LoRA target modules
     lora_target_modules = get_lora_target_modules_from_config(config['base_model_id'], config['hf_token'])
     if not lora_target_modules:
-        print("--- Job Failed: Could not determine LoRA target modules. Exiting. ---")
-        return
+        error_msg = "--- Job Failed: Could not determine LoRA target modules. Exiting. ---"
+        print(error_msg)
+        if callback: callback("failed", 0, error_msg)
+        return None
 
     env_vars = {
         "HF_TOKEN": config['hf_token'],
@@ -83,15 +91,23 @@ def run_tuning_job(config):
         env_vars["DATASET_SUBSET"] = config['dataset_subset']
     print(f"--> Prepared environment variables for the job.")
 
+    if callback: callback("creating_instance", 25, "Creating instance...")
+    
     new_instance_id = vast_manager.create_instance(instance_id, docker_image, env_vars, bid_price)
     if not new_instance_id:
-        print("--- Job Failed: Could not create the instance. Exiting. ---")
-        return
+        error_msg = "--- Job Failed: Could not create the instance. Exiting. ---"
+        print(error_msg)
+        if callback: callback("failed", 0, error_msg)
+        return None
+    
+    if callback: callback("instance_ready", 30, f"Instance {new_instance_id} created successfully")
         
     print("\n--- Job Started Successfully on Vast.ai ---")
     print("The training script will now run automatically inside the container.")
     print("You can monitor its progress with the command:")
     print(f"vastai ssh {new_instance_id} 'tail -f /app/training.log'")
+    
+    return new_instance_id
 
 
 def main():
