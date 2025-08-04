@@ -1,4 +1,5 @@
 python main.py --config my_job.yaml
+python async/async_main.py --config my_job.yaml
 
 python main.py --config my_job.yaml --test-targets
 

@@ -1,8 +1,0 @@
-base_model_id: mistralai/Mistral-7B-Instruct-v0.2
-dataset_id: test-subprocess
-docker_image: halez/lora-finetuner:latest
-gpu_name: H100 NVL
-hf_token: hf_KJkLuvPGXojpqFfppMCcApgxRMbIsmYbDis
-lora_model_repo: Ihmzf/my-gemma-3-4b-it-lora
-max_train_steps: 100
-num_gpus: 1

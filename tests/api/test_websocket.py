@@ -5,7 +5,7 @@ import json
 
 
 async def test_websocket():
-    job_id = "94615820-fc2d-46fe-80ce-69d0ee0a76b6"
+    job_id = "acd6fbd8-9480-4de9-9a19-843174c649b7"
     uri = f"ws://localhost:8000/ws/{job_id}"
     
     try:

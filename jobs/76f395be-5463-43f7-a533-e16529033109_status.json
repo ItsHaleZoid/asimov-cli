@@ -1,0 +1,1 @@
+{"status": "training", "progress": 70, "message": "Training is running on instance 24641849. Use 'vastai ssh 24641849 tail -f /app/training.log' to monitor.", "timestamp": "2025-08-03T10:22:53.740344"}
