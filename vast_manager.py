@@ -140,15 +140,8 @@ def create_instance(instance_id, docker_image, env_vars, bid_price, local_train_
                         # Also upload the lora_instructions.py file (force overwrite)
                         if upload_file_to_instance(new_id, "training/lora_instructions.py", "/app/lora_instructions.py"):
                             # Set environment variables and start training
-                            print(f"--> DEBUG: Environment variables being set:")
-                            for key, value in env_vars.items():
-                                print(f"    {key}: {value[:20] + '...' if len(str(value)) > 20 else value}")
-                            
-                            env_exports = " && ".join([f"export {key}='{value}'" for key, value in env_vars.items()])
-                            print(f"--> DEBUG: Full export command: {env_exports}")
-                            
+                            env_exports = " && ".join([f"export {key}={value}" for key, value in env_vars.items()])
                             start_training_command = f"cd /app && {env_exports} && python intelligent_train.py"
-                            print(f"--> DEBUG: Full training command: {start_training_command}")
                             if execute_command_on_instance(new_id, start_training_command):
                                 print(f"--> Training started successfully on instance {new_id}!")
                                 return new_id

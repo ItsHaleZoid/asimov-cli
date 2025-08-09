@@ -11,7 +11,7 @@ dataset_subset: "default" # Choose from: synthetic_sft, synthetic_rl, synthetic_
 lora_model_repo: "hamzafaisal/my-distilgpt2-new-lora" # Where to save the adapter
 
 # Vast.ai GPU requirements
-gpu_name: "H100 SXM"
+gpu_name: "H100 NVL"
 num_gpus: 1
 
 max_train_steps: 20

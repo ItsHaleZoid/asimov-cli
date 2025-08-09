@@ -47,11 +47,6 @@ RUN chmod +x start.sh
 RUN python3 -m pip install --no-cache-dir --upgrade pip && \
     python3 -m pip install --no-cache-dir -r requirements.txt
 
-# Default envs to reduce noisy logs and avoid xet-based downloads
-ENV RUST_LOG=error \
-    HF_HUB_DISABLE_XET=1 \
-    HF_HUB_ENABLE_HF_TRANSFER=0
-
 # Expose SSH port
 EXPOSE 22
 
