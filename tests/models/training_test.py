@@ -1,196 +1,250 @@
 import os
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+os.environ.setdefault("RUST_LOG", "error")
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
+
 import torch
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     TrainingArguments,
     Trainer,
-    AutoConfig
 )
 from peft import LoraConfig, get_peft_model
 
 
+def classify_model(model_id: str):
+    mid = model_id.lower()
+    # Minimal classifier modeled after intelligent_train.py
+    if any(t in mid for t in ["gpt-oss", "gpt_oss", "openai/gpt-oss", "openai/gpt_oss"]):
+        return {
+            "family": "gpt_oss",
+            "precision": torch.bfloat16,
+            "attention": "eager",
+            "device_map": "auto",
+            "target_modules": "all-linear",
+            "target_parameters": [
+                "7.mlp.experts.gate_up_proj",
+                "7.mlp.experts.down_proj",
+                "15.mlp.experts.gate_up_proj",
+                "15.mlp.experts.down_proj",
+            ],
+            "lora": {"r": 8, "alpha": 16},
+        }
+    elif any(t in mid for t in ["mistral", "codestral"]):
+        return {
+            "family": "mistral",
+            "precision": torch.bfloat16,
+            "attention": "sdpa",
+            "device_map": "auto",
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+            ],
+            "lora": {"r": 16, "alpha": 32, "dropout": 0.05},
+        }
+    elif "gemma" in mid:
+        return {
+            "family": "gemma",
+            "precision": torch.bfloat16,
+            "attention": "eager",
+            "device_map": "auto",
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+            ],
+            "lora": {"r": 16, "alpha": 32, "dropout": 0.05},
+        }
+    else:
+        return {
+            "family": "generic",
+            "precision": torch.float32,
+            "attention": None,
+            "device_map": "auto",
+            "target_modules": None,
+            "lora": {"r": 8, "alpha": 16, "dropout": 0.05},
+        }
 
 
 def main():
-    print("--- Initialization Test Script Started ---")
-    
-    # --- 1. Read configuration from environment variables ---
-    hf_token = os.getenv("HF_TOKEN", "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")
-    base_model_id = "mistralai/Mistral-7B-Instruct-v0.2"
-    dataset_id = "microsoft/rStar-Coder"
-    dataset_subset = "synthetic_sft"
+    print("=== TRAINING TEST (Modeled after intelligent_train) ===")
+    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    base_model_id = os.environ.get("BASE_MODEL_ID", "sshleifer/tiny-gpt2")
+    dataset_id = os.environ.get("DATASET_ID", "microsoft/rStar-Coder")
+    dataset_subset = os.environ.get("DATASET_SUBSET", "synthetic_sft")
 
-    print(hf_token, base_model_id, dataset_id, dataset_subset)
-    
-    if not all([hf_token, base_model_id, dataset_id]):
-        print("❌ FATAL: Missing one or more required configuration values (hf_token, base_model_id, dataset_id).")
-        return
+    print(f"Model: {base_model_id}")
+    print(f"Dataset: {dataset_id} ({dataset_subset})")
 
-    print(f"✅ Base Model: {base_model_id}")
-    print(f"✅ Dataset: {dataset_id}")
-    if dataset_subset:
-        print(f"✅ Dataset Subset: {dataset_subset}")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Device: {device}")
 
     try:
-        # --- H100 Compatibility Setup ---
-        # Check for CUDA availability and set appropriate device
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        if device == "cuda":
-            print(f"🔥 CUDA detected - using GPU acceleration on {torch.cuda.get_device_name(0)}")
-            print(f"📊 Available GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
-        else:
-            print("💻 Using CPU - CUDA not available")
-        
-        print(f"✅ Device: {device}")
+        # Tokenizer and model load (pretrained, like intelligent_train)
+        model_cfg = classify_model(base_model_id)
+        model_kwargs = {
+            "token": hf_token,
+            "trust_remote_code": True,
+        }
+        if model_cfg["precision"] != "auto":
+            model_kwargs["torch_dtype"] = model_cfg["precision"]
+        if model_cfg.get("attention"):
+            model_kwargs["attn_implementation"] = model_cfg["attention"]
 
-        # --- 2. Load Blueprints (Config and Tokenizer) ---
-        print("\n--> Step 1 of 5: Loading model config and tokenizer...")
-        config = AutoConfig.from_pretrained(base_model_id, token=hf_token, trust_remote_code=True)
+        print("Loading model...")
+        model = AutoModelForCausalLM.from_pretrained(base_model_id, **model_kwargs)
+        print("Loading tokenizer...")
         tokenizer = AutoTokenizer.from_pretrained(base_model_id, token=hf_token, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-        print("    ✅ Config and Tokenizer loaded successfully.")
 
-        # --- 3. Build "Hollow" Model and Apply LoRA ---
-        print("\n--> Step 2 of 5: Building hollow model from config...")
-        print("    📋 Model configuration details:")
-        print(f"    ├── Model type: {config.model_type}")
-        print(f"    ├── Architecture: {config.architectures}")
-        print(f"    ├── Hidden size: {config.hidden_size}")
-        print(f"    ├── Number of layers: {config.num_hidden_layers}")
-        print(f"    ├── Number of attention heads: {config.num_attention_heads}")
-        print(f"    ├── Vocabulary size: {config.vocab_size}")
-        print(f"    └── Maximum position embeddings: {getattr(config, 'max_position_embeddings', 'Not specified')}")
-        
-        # Use optimal precision for H100 (supports bfloat16 natively)
-        torch_dtype = torch.bfloat16 if device == "cuda" else torch.float32
-        print(f"    🎯 Using torch dtype: {torch_dtype}")
-        
-        print("    🏗️  Creating model from config (hollow model - no pretrained weights)...")
-        model = AutoModelForCausalLM.from_config(
-            config, 
-            trust_remote_code=True,
-            torch_dtype=torch_dtype
-        )
-        
-        print("    📊 Model structure summary:")
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"    ├── Total parameters: {total_params:,}")
-        print(f"    ├── Trainable parameters: {trainable_params:,}")
-        print(f"    └── Model size estimate: {total_params * 4 / 1024**3:.2f} GB (FP32)")
-        
-        print(f"    🚀 Moving model to device: {device}")
-        model = model.to(device)
-        
-        if device == "cuda":
-            memory_allocated = torch.cuda.memory_allocated(0) / 1024**3
-            memory_reserved = torch.cuda.memory_reserved(0) / 1024**3
-            print(f"    📈 GPU memory after model loading:")
-            print(f"    ├── Allocated: {memory_allocated:.2f} GB")
-            print(f"    └── Reserved: {memory_reserved:.2f} GB")
-        
-        print("    ✅ Hollow model built successfully.")
-        
-        print("\n--> Step 3 of 5: Applying LoRA adapters...")
-        # Auto-detect all linear layers for the test
-        target_modules = [name.split('.')[-1] for name, module in model.named_modules() if "Linear" in str(type(module))]
-        target_modules = list(set(target_modules))
-        if "lm_head" in target_modules:
-            target_modules.remove("lm_head")
+        # Resize embeddings before LoRA
+        model.resize_token_embeddings(len(tokenizer))
 
-        # Keep LoRA rank small for testing
-        lora_config = LoraConfig(r=4, target_modules=target_modules, task_type="CAUSAL_LM")
+        # Determine target modules
+        target_modules = model_cfg["target_modules"]
+        if target_modules is None:
+            # Auto-detect all linear layer suffixes
+            names = []
+            for name, module in model.named_modules():
+                if "Linear" in str(type(module)):
+                    names.append(name.split(".")[-1])
+            target_modules = list(set(names))
+
+        # Determine modules_to_save (embeddings + heads)
+        modules_to_save = []
+        for name, _ in model.named_modules():
+            low = name.lower()
+            if ("embed" in low and ("token" in low or "word" in low)) or ("lm_head" in low and "embed" not in low):
+                modules_to_save.append(name)
+        if not modules_to_save:
+            modules_to_save = ["embed_tokens", "wte", "token_embedding", "word_embeddings", "lm_head", "head", "classifier"]
+
+        # PEFT version-aware MoE expert targeting like intelligent_train
+        lora_rank = model_cfg["lora"]["r"]
+        lora_alpha = model_cfg["lora"]["alpha"]
+        lora_dropout = model_cfg["lora"].get("dropout", 0.0)
+
+        if model_cfg["family"] == "gpt_oss":
+            try:
+                from peft import __version__ as peft_version
+                from packaging.version import parse as vparse
+                supports_target_parameters = vparse(peft_version) >= vparse("0.17.0")
+            except Exception:
+                supports_target_parameters = False
+
+            if supports_target_parameters and model_cfg.get("target_parameters"):
+                lora_config = LoraConfig(
+                    r=lora_rank,
+                    lora_alpha=lora_alpha,
+                    target_modules=[],
+                    target_parameters=model_cfg["target_parameters"],
+                    task_type="CAUSAL_LM",
+                    modules_to_save=modules_to_save,
+                )
+            else:
+                # Fallback: map expert parameter paths to layer indices
+                try:
+                    layer_indices = sorted({int(p.split(".")[0]) for p in model_cfg.get("target_parameters", [])})
+                except Exception:
+                    layer_indices = []
+                layers_pattern = None
+                if hasattr(model, "model") and hasattr(model.model, "layers"):
+                    layers_pattern = "model.layers"
+                elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):
+                    layers_pattern = "transformer.h"
+                lora_config = LoraConfig(
+                    r=lora_rank,
+                    lora_alpha=lora_alpha,
+                    target_modules=["gate_up_proj", "down_proj"],
+                    task_type="CAUSAL_LM",
+                    modules_to_save=modules_to_save,
+                    layers_to_transform=layer_indices if layer_indices else None,
+                    layers_pattern=layers_pattern,
+                )
+        else:
+            lora_config = LoraConfig(
+                r=lora_rank,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                target_modules=target_modules,
+                task_type="CAUSAL_LM",
+                modules_to_save=modules_to_save,
+            )
+
         model = get_peft_model(model, lora_config)
-        print("    ✅ LoRA adapters applied successfully.")
         model.print_trainable_parameters()
 
-        # --- 4. Load and Process a Data Sample ---
-        print("\n--> Step 4 of 5: Loading cached data (if available)...")
-        # Use cached data if available, don't download full dataset
-        print("    📡 Using streaming mode to avoid large downloads...")
-        dataset = load_dataset(dataset_id, name=dataset_subset, split="train", streaming=True)
-        dataset = dataset.take(5)  # Keep sample size small for testing
-        dataset = list(dataset)  # Convert to list for processing
-        
-        print(f"    📊 Loaded {len(dataset)} samples for testing")
-        
-        def format_prompt(example):
-            if 'instruction' in example and 'response' in example:
-                return {"text": f"### Instruction:\n{example['instruction']}\n\n### Response:\n{example['response']}"}
-            else:
-                return {"text": str(example)}
-        
-        from datasets import Dataset
-        dataset = Dataset.from_list(dataset)  # Convert back to Dataset object
-        # Keep max_length reasonable for testing
-        tokenized_dataset = dataset.map(lambda ex: tokenizer(format_prompt(ex)["text"], truncation=True, max_length=128), batched=False)
-        print("    ✅ Cached data sample loaded and processed successfully.")
+        # Minimal dataset sample (streaming) modeled lightly after intelligent approach
+        print("Loading tiny dataset sample (streaming)...")
+        sds = load_dataset(dataset_id, name=dataset_subset, split="train", streaming=True)
+        sample = list(sds.take(5))
+        ds = Dataset.from_list(sample)
 
-        # --- 5. Initialize Trainer and Run a Single Step ---
-        print("\n--> Step 5 of 5: Initializing Trainer and running minimal training steps...")
-        
-        # H100-optimized data collator
-        def data_collator(batch):
-            input_ids = []
-            labels = []
-            for item in batch:
-                ids = item['input_ids']
-                if isinstance(ids, list):
-                    ids = torch.tensor(ids, dtype=torch.long)
-                elif not isinstance(ids, torch.Tensor):
-                    ids = torch.tensor(ids, dtype=torch.long)
-                input_ids.append(ids)
-                labels.append(ids.clone())
-            
-            # Pad sequences to same length
-            max_len = max(len(ids) for ids in input_ids)
-            padded_input_ids = []
-            padded_labels = []
-            
-            for ids in input_ids:
-                if len(ids) < max_len:
-                    padding = torch.full((max_len - len(ids),), tokenizer.pad_token_id, dtype=torch.long)
-                    padded_ids = torch.cat([ids, padding])
-                else:
-                    padded_ids = ids[:max_len]
-                padded_input_ids.append(padded_ids)
-                padded_labels.append(padded_ids.clone())
-            
-            return {
-                'input_ids': torch.stack(padded_input_ids),
-                'labels': torch.stack(padded_labels)
-            }
-        
+        def format_example(ex):
+            if "instruction" in ex and "response" in ex:
+                return {"text": f"### Instruction:\n{ex['instruction']}\n\n### Response:\n{ex['response']}"}
+            return {"text": str(ex)}
+
+        ds = ds.map(lambda ex: format_example(ex))
+        tokenized = ds.map(lambda ex: tokenizer(ex["text"], truncation=True, max_length=128), batched=False)
+
+        class SafeCollator:
+            def __init__(self, tok):
+                self.tok = tok
+                self.pad_id = tok.pad_token_id
+            def __call__(self, batch):
+                input_ids = [torch.tensor(b["input_ids"], dtype=torch.long) for b in batch]
+                max_len = max(len(x) for x in input_ids)
+                padded = []
+                labels = []
+                for ids in input_ids:
+                    if len(ids) < max_len:
+                        pad = torch.full((max_len - len(ids),), self.pad_id, dtype=torch.long)
+                        ids = torch.cat([ids, pad])
+                    padded.append(ids)
+                    labels.append(ids.clone())
+                return {"input_ids": torch.stack(padded), "labels": torch.stack(labels)}
+
         trainer = Trainer(
             model=model,
-            train_dataset=tokenized_dataset,
+            train_dataset=tokenized,
             args=TrainingArguments(
                 output_dir="./output",
                 per_device_train_batch_size=1,
-                max_steps=1, # Run for only 1 step to minimize training time
-                save_steps=999999, # Disable saving to speed up test
+                max_steps=1,
+                save_steps=999999,
                 logging_steps=1,
-                dataloader_num_workers=0, # Single-threaded for simplicity
-                fp16=False,  # Use bfloat16 instead for H100
-                bf16=device == "cuda",  # Enable bf16 for H100 optimization
-                dataloader_pin_memory=device == "cuda",  # Optimize data loading for GPU
+                dataloader_num_workers=0,
+                fp16=False,
+                bf16=(device == "cuda"),
+                dataloader_pin_memory=(device == "cuda"),
             ),
-            data_collator=data_collator,
+            data_collator=SafeCollator(tokenizer),
         )
         trainer.train()
-        print("    ✅ Trainer initialized and completed minimal training successfully.")
-
-        print("\n🎉 --- TEST RUN COMPLETED SUCCESSFULLY --- 🎉")
-        print("Your configuration is valid and the training process can start.")
+        print("✅ Minimal training step completed")
+        print("🎉 TEST SUCCESS")
 
     except Exception as e:
-        print(f"\n❌ --- TEST RUN FAILED --- ❌")
-        print(f"An error occurred: {e}")
+        print("❌ TEST FAILED")
+        print(f"Error: {e}")
         import traceback
         traceback.print_exc()
+
 
 if __name__ == "__main__":
     main()

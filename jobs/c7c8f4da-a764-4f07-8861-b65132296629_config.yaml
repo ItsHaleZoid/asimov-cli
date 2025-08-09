@@ -1,9 +1,0 @@
-base_model_id: mistralai/Mistral-7B-Instruct-v0.2
-dataset_id: microsoft/rStar-Coder
-dataset_subset: synthetic_sft
-docker_image: halez/lora-finetuner:latest
-gpu_name: H100 NVL
-hf_token: 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
-lora_model_repo: hamzafaisal/mistral-instruct-7b-lora
-max_train_steps: 100
-num_gpus: 1

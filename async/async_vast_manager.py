@@ -5,6 +5,94 @@ import threading
 import time
 from typing import List, Dict, Any, Tuple, Optional
 
+async def search_multiple_instances(gpu_name: str = "H100 NVL", num_gpus: int = 1, callback=None) -> List[Tuple[int, float]]:
+    """Asynchronously searches for multiple available instances on Vast.ai, returns list of (instance_id, bid_price)."""
+    print(f"--> Searching for multiple {num_gpus}x {gpu_name} interruptible instances...")
+    if callback: 
+        if asyncio.iscoroutinefunction(callback):
+            await callback("searching_gpu", 15, f"Searching for {num_gpus}x {gpu_name} instances...")
+        else:
+            callback("searching_gpu", 15, f"Searching for {num_gpus}x {gpu_name} instances...")
+    
+    # Start with the most restrictive search, then progressively relax criteria
+    search_strategies = [
+        # Strategy 1: Strict requirements
+        {
+            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true reliability>=0.95 disk_space>=100',
+            "description": "strict criteria"
+        },
+        # Strategy 2: Relax verification and reliability
+        {
+            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true reliability>=0.8 disk_space>=100',
+            "description": "relaxed verification"
+        },
+        # Strategy 3: Just disk space and basic requirements
+        {
+            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true disk_space>=100',
+            "description": "minimal disk space"
+        },
+        # Strategy 4: Only GPU and rentable requirements
+        {
+            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true',
+            "description": "basic requirements only"
+        }
+    ]
+    
+    for strategy in search_strategies:
+        print(f"--> Trying {strategy['description']}...")
+        
+        command = [
+            "vastai", "search", "offers",
+            strategy["criteria"],
+            "--interruptible",
+            "--order", "dph_total asc",
+            "--raw"
+        ]
+        
+        print(f"    Running command: {' '.join(command)}")
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0 and stdout.strip():
+                instances = json.loads(stdout)
+                if instances:
+                    # Sort by price to get the absolute cheapest
+                    instances = sorted(instances, key=lambda x: float(x.get('dph_total', float('inf'))))
+                    
+                    # Show top options found
+                    print(f"--> Found {len(instances)} instances with {strategy['description']}")
+                    for i, instance in enumerate(instances[:5]):  # Show top 5
+                        gpu_info = f"{instance.get('gpu_name', 'Unknown')} x{instance.get('num_gpus', '?')}"
+                        reliability = instance.get('reliability', 0)
+                        print(f"    Option {i+1}: Instance {instance['id']} - ${instance['dph_total']}/hr - {gpu_info} (reliability: {reliability:.2f})")
+                    
+                    # Prepare the list of (instance_id, bid_price) tuples
+                    instance_list = []
+                    for instance in instances[:5]:  # Return top 5 options
+                        recommended_price = float(instance.get('min_bid', instance['dph_total']))
+                        bid_price = recommended_price * 1.20  # Add 20% buffer
+                        instance_list.append((instance['id'], bid_price))
+                    
+                    if callback: 
+                        if asyncio.iscoroutinefunction(callback):
+                            await callback("found_gpu", 20, f"Found {len(instance_list)} instances to try")
+                        else:
+                            callback("found_gpu", 20, f"Found {len(instance_list)} instances to try")
+                    
+                    return instance_list
+                    
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"    Search failed: {e}")
+            continue
+    
+    print("--> No suitable instances found with any search strategy.")
+    return []
+
 async def search_cheapest_instance(gpu_name: str = "H100 NVL", num_gpus: int = 1, callback=None) -> Tuple[Optional[int], Optional[float]]:
     """Asynchronously searches for the cheapest available interruptible instance on Vast.ai."""
     print(f"--> Searching for the cheapest {num_gpus}x {gpu_name} interruptible instance...")
@@ -98,7 +186,7 @@ async def search_cheapest_instance(gpu_name: str = "H100 NVL", num_gpus: int = 1
                     
                     cheapest = instances[0]
                     recommended_price = float(cheapest.get('min_bid', cheapest['dph_total']))
-                    bid_price = recommended_price * 1.20  # Add 80% buffer
+                    bid_price = recommended_price * 0.2  # Add 80% buffer
                     print(f"--> Selected cheapest: Instance {cheapest['id']}")
                     print(f"    Recommended price: ${recommended_price:.4f}/hr")
                     print(f"    Our bid: ${bid_price:.4f}/hr (recommended + 80%)")
@@ -116,6 +204,101 @@ async def search_cheapest_instance(gpu_name: str = "H100 NVL", num_gpus: int = 1
     print("--> No suitable instances found with any search strategy.")
     return None, None
 
+async def search_cheapest_on_demand_instance(gpu_name: str = "H100 NVL", num_gpus: int = 1, callback=None) -> Tuple[Optional[int], Optional[float]]:
+    """Asynchronously searches for the cheapest available on-demand instance on Vast.ai."""
+    print(f"--> Searching for the cheapest {num_gpus}x {gpu_name} on-demand instance...")
+    if callback: 
+        if asyncio.iscoroutinefunction(callback):
+            await callback("searching_gpu", 15, f"Searching for {num_gpus}x {gpu_name} on-demand instances...")
+        else:
+            callback("searching_gpu", 15, f"Searching for {num_gpus}x {gpu_name} on-demand instances...")
+    
+    # Search strategies for on-demand instances (without --interruptible flag)
+    search_strategies = [
+        # Strategy 1: Strict requirements
+        {
+            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true reliability>=0.95 disk_space>=100',
+            "description": "strict criteria (on-demand)"
+        },
+        # Strategy 2: Relax verification and reliability
+        {
+            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true reliability>=0.8 disk_space>=100',
+            "description": "relaxed verification (on-demand)"
+        },
+        # Strategy 3: Just disk space and basic requirements
+        {
+            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true disk_space>=100',
+            "description": "minimal disk space (on-demand)"
+        },
+        # Strategy 4: Only GPU and rentable requirements
+        {
+            "criteria": f'num_gpus={num_gpus} gpu_name="{gpu_name}" rentable=true',
+            "description": "basic requirements only (on-demand)"
+        },
+        # Strategy 5: Alternative GPU names that might be cheaper
+        {
+            "criteria": f'num_gpus={num_gpus} (gpu_name="RTX 4090" OR gpu_name="RTX 3090" OR gpu_name="A100" OR gpu_name="V100") rentable=true',
+            "description": "alternative high-end GPUs (on-demand)"
+        },
+        # Strategy 6: Cast wider net with any modern GPU
+        {
+            "criteria": f'num_gpus={num_gpus} (gpu_name~="RTX" OR gpu_name~="A100" OR gpu_name~="H100" OR gpu_name~="V100") rentable=true',
+            "description": "any modern GPU (on-demand)"
+        }
+    ]
+    
+    for strategy in search_strategies:
+        print(f"--> Trying {strategy['description']}...")
+        
+        command = [
+            "vastai", "search", "offers",
+            strategy["criteria"],
+            # NOTE: No --interruptible flag for on-demand instances
+            "--order", "dph_total asc",
+            "--raw"
+        ]
+        
+        print(f"    Running command: {' '.join(command)}")
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0 and stdout.strip():
+                instances = json.loads(stdout)
+                if instances:
+                    # Sort by price to get the absolute cheapest
+                    instances = sorted(instances, key=lambda x: float(x.get('dph_total', float('inf'))))
+                    
+                    # Show top 3 cheapest options
+                    print(f"--> Found {len(instances)} on-demand instances with {strategy['description']}")
+                    for i, instance in enumerate(instances[:3]):
+                        gpu_info = f"{instance.get('gpu_name', 'Unknown')} x{instance.get('num_gpus', '?')}"
+                        reliability = instance.get('reliability', 0)
+                        print(f"    Option {i+1}: Instance {instance['id']} - ${instance['dph_total']}/hr - {gpu_info} (reliability: {reliability:.2f})")
+                    
+                    cheapest = instances[0]
+                    # For on-demand instances, use the exact price (no bidding)
+                    price = float(cheapest['dph_total'])
+                    print(f"--> Selected cheapest on-demand: Instance {cheapest['id']}")
+                    print(f"    On-demand price: ${price:.4f}/hr")
+                    if callback: 
+                        if asyncio.iscoroutinefunction(callback):
+                            await callback("found_gpu", 20, f"Found on-demand instance {cheapest['id']} at ${price:.4f}/hr")
+                        else:
+                            callback("found_gpu", 20, f"Found on-demand instance {cheapest['id']} at ${price:.4f}/hr")
+                    return cheapest['id'], price
+                    
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"    Search failed: {e}")
+            continue
+    
+    print("--> No suitable on-demand instances found with any search strategy.")
+    return None, None
+
 def schedule_auto_shutdown(instance_id: int, timeout_minutes: int = 100) -> threading.Thread:
     """Schedules automatic shutdown of instance after specified timeout."""
     def shutdown_timer():
@@ -131,6 +314,54 @@ def schedule_auto_shutdown(instance_id: int, timeout_minutes: int = 100) -> thre
     timer_thread = threading.Thread(target=shutdown_timer, daemon=True)
     timer_thread.start()
     return timer_thread
+
+async def create_instance_with_fallback(gpu_name: str, docker_image: str, env_vars: Dict[str, Any], local_train_script: str = "training/train.py", callback=None) -> Optional[int]:
+    """Tries to create an instance with fallback to other instances, including on-demand if interruptible fails."""
+    print(f"--> Starting instance creation with fallback for {gpu_name}...")
+    
+    # Phase 1: Try interruptible instances first (cheaper)
+    print("--> Phase 1: Attempting interruptible instances...")
+    instances = await search_multiple_instances(gpu_name=gpu_name, callback=callback)
+    if instances:
+        # Try up to 3 interruptible instances
+        max_attempts = min(3, len(instances))
+        for attempt, (instance_id, bid_price) in enumerate(instances[:max_attempts]):
+            print(f"--> Interruptible attempt {attempt + 1}/{max_attempts}: Trying instance {instance_id}")
+            
+            result = await create_instance(instance_id, docker_image, env_vars, bid_price, local_train_script, callback)
+            if result:
+                print(f"--> Success with interruptible instance {result}")
+                return result
+                
+            if attempt < max_attempts - 1:
+                print(f"--> Instance {instance_id} failed, trying next interruptible option...")
+        
+        print(f"--> All {max_attempts} interruptible attempts failed")
+    else:
+        print("--> No interruptible instances found")
+    
+    # Phase 2: Fallback to on-demand instances if interruptible failed
+    print("--> Phase 2: Falling back to on-demand instances...")
+    if callback: 
+        if asyncio.iscoroutinefunction(callback):
+            await callback("searching_gpu", 15, "Interruptible instances failed, trying on-demand...")
+        else:
+            callback("searching_gpu", 15, "Interruptible instances failed, trying on-demand...")
+    
+    instance_id, price = await search_cheapest_on_demand_instance(gpu_name=gpu_name, callback=callback)
+    if instance_id:
+        print(f"--> Trying on-demand instance {instance_id} at ${price:.4f}/hr")
+        result = await create_instance(instance_id, docker_image, env_vars, price, local_train_script, callback)
+        if result:
+            print(f"--> Success with on-demand instance {result}")
+            return result
+        else:
+            print(f"--> On-demand instance {instance_id} also failed")
+    else:
+        print("--> No on-demand instances found")
+    
+    print("--> All fallback attempts failed (both interruptible and on-demand)")
+    return None
 
 async def create_instance(instance_id: int, docker_image: str, env_vars: Dict[str, Any], bid_price: float, local_train_script: str = "training/train.py", callback=None) -> Optional[int]:
     """Creates a Vast.ai instance and uploads local training script."""
@@ -166,7 +397,19 @@ async def create_instance(instance_id: int, docker_image: str, env_vars: Dict[st
         stdout, stderr = await process.communicate()
         
         if process.returncode == 0:
-            instance_info = json.loads(stdout)
+            if not stdout.strip():
+                print(f"--> Error: Empty response from vastai create command")
+                print(f"    stderr: {stderr.decode() if stderr else 'No error output'}")
+                return None
+            
+            try:
+                instance_info = json.loads(stdout)
+            except json.JSONDecodeError as je:
+                print(f"--> Error parsing JSON response: {je}")
+                print(f"    Raw stdout: {stdout.decode()}")
+                print(f"    stderr: {stderr.decode() if stderr else 'No error output'}")
+                return None
+                
             if instance_info.get("success"):
                 new_id = instance_info['new_contract']
                 print(f"--> Successfully created instance {new_id}. Waiting for it to start...")
@@ -200,8 +443,10 @@ async def create_instance(instance_id: int, docker_image: str, env_vars: Dict[st
                             # Also upload the lora_instructions.py file (force overwrite)
                             if await upload_file_to_instance(new_id, "training/lora_instructions.py", "/app/lora_instructions.py"):
                                 # Set environment variables and start training
-                                env_exports = " && ".join([f"export {key}={value}" for key, value in env_vars.items()])
-                                start_training_command = f"cd /app && {env_exports} && python intelligent_train.py"
+                                env_exports = " && ".join([f"export {key}='{value}'" for key, value in env_vars.items()])
+                                # Raise ulimit for open files to mitigate 'Too many open files' during large downloads
+                                ulimit_cmd = "ulimit -n 65535 || true"
+                                start_training_command = f"cd /app && {ulimit_cmd} && {env_exports} && python intelligent_train.py"
                                 if await execute_command_on_instance(new_id, start_training_command):
                                     print(f"--> Training started successfully on instance {new_id}!")
                                     return new_id
@@ -222,6 +467,18 @@ async def create_instance(instance_id: int, docker_image: str, env_vars: Dict[st
                     return None
             else:
                 print(f"--> Failed to create instance. Response: {instance_info}")
+                # Check for specific failure reasons
+                if 'error' in instance_info:
+                    print(f"    Error details: {instance_info['error']}")
+                if 'new_contract' in instance_info:
+                    print(f"    Contract ID: {instance_info['new_contract']}")
+                    
+                # Possible reasons for failure:
+                print("    Possible reasons:")
+                print("    - Instance already rented by someone else")
+                print("    - Bid price too low")
+                print("    - Host requirements not met")
+                print("    - Vast.ai API rate limiting")
                 return None
         else:
             print(f"--> Error creating instance: {stderr.decode()}")
@@ -351,7 +608,7 @@ ls -la /app >> /app/training.log 2>&1
 echo "Environment variables:" >> /app/training.log 2>&1
 env | grep -E "(HF_TOKEN|BASE_MODEL|DATASET|LORA|DATASET_SUBSET)" >> /app/training.log 2>&1
 echo "=== Installing additional packages ===" >> /app/training.log 2>&1
-python -m pip install protobuf einops sentencepiece accelerate bitsandbytes deepspeed xformers >> /app/training.log 2>&1
+python -m pip install --upgrade transformers protobuf einops sentencepiece trl peft accelerate bitsandbytes deepspeed xformers  >> /app/training.log 2>&1
 export WANDB_DISABLED="true"
 echo "=== Starting Python training ===" >> /app/training.log 2>&1
 {command} >> /app/training.log 2>&1 &
