@@ -438,7 +438,3 @@ async def debug_job(job_id: str):
 async def health_check():
     return {"status": "healthy", "active_jobs": len(training_jobs)}
 
-if __name__ == "__main__":
-    import uvicorn
-    # Make sure to run this file from the project root directory
-    uvicorn.run("api_server:app", host="0.0.0.0", port=8000, reload=True)
